@@ -2,12 +2,16 @@
 
 A powerful Google Colab-based tool for downloading media from multiple sources directly to Google Drive with automatic Plex-friendly organization.
 
+> **🛠 This is the patched fork (`chnd372/ultimate-downloader-fix`)** — based on upstream [xersbtt/ultimate-downloader-colab](https://github.com/xersbtt/ultimate-downloader-colab) v6.3 with **gofile v2026 compatibility fix**. Upstream's hardcoded `wt="4fd6sg89d7s6"` is dead — gofile now requires a dynamic `X-Website-Token` recomputed per request. **Use this fork instead of upstream for gofile links to actually download.** See [CHANGELOG.md](CHANGELOG.md) v6.3.1 entry.
+
 ## ✨ Features
 
 - **Multi-Source Downloads**: Gofile, Pixeldrain, Mega.nz, FShare, YouTube, OK.ru, Twitch, Vimeo, and more
 - **35+ Premium Hosts via Real-Debrid or TorBox**: MediaFire, 1fichier, Rapidgator, Nitroflare, etc.
 - **Choice of Debrid Service**: Select Real-Debrid, TorBox, or None from the Debrid toggle — both handle premium hosts and magnet links
 - **Parallel Downloads**: Download up to 5 files concurrently for Gofile, Pixeldrain, debrid, and direct HTTP links
+- **Recursive Gofile Folder Walk** *(this fork)*: Public subfolders inside a gofile folder are expanded into individual file links
+- **Password-Protected Gofile Links** *(this fork)*: Append `::PASSWORD` to a gofile URL to download password-locked folders — e.g. `https://gofile.io/d/abc123::myPass`
 - **Session Resume**: Automatically resume interrupted downloads after runtime restart
 - **Interrupt & Retry**: Stop a running batch cleanly with Runtime → Interrupt (progress saved); retry failures with one click via the Retry Failed button
 - **Queue Management**: Preview, reorder, sort (A-Z/Z-A), and select which files to download
@@ -36,12 +40,19 @@ A powerful Google Colab-based tool for downloading media from multiple sources d
 3. Paste this one-liner into a cell:
 
 ```python
-import requests; exec(requests.get("https://raw.githubusercontent.com/xersbtt/ultimate-downloader-colab/main/ultimate_downloader.py").text)
+import requests; exec(requests.get("https://raw.githubusercontent.com/chnd372/ultimate-downloader-fix/main/ultimate_downloader.py").text)
 ```
 
 Run the cell and the UI will appear automatically.
 
-> **Want to review the code first?** Open [`ultimate_downloader.py`](https://github.com/xersbtt/ultimate-downloader-colab/blob/main/ultimate_downloader.py), copy the entire contents, and paste directly into a Colab cell.
+> **Want to review the code first?** Open [`ultimate_downloader.py`](https://github.com/chnd372/ultimate-downloader-fix/blob/main/ultimate_downloader.py), copy the entire contents, and paste directly into a Colab cell.
+>
+> **Want persistent local copy in Colab?** Use `!wget` once so the file is cached in the runtime's working directory:
+> ```python
+> !wget -q https://raw.githubusercontent.com/chnd372/ultimate-downloader-fix/main/ultimate_downloader.py
+> %run ultimate_downloader.py
+> ```
+> Subsequent runs in the same session can then just `%run ultimate_downloader.py` without re-downloading.
 
 ### 2. Configure API Keys (Optional)
 
@@ -62,6 +73,7 @@ Store your keys securely in Colab Secrets:
 Enter your download links in the text area (one per line):
 ```
 https://gofile.io/d/abc123
+https://gofile.io/d/abc123::myPassword        # password-protected (this fork)
 https://pixeldrain.com/u/xyz789
 magnet:?xt=urn:btih:...
 https://www.youtube.com/playlist?list=...
@@ -329,7 +341,17 @@ Yes and no. It orchestrates multiple tools (yt-dlp, aria2, megatools, unrar) und
 
 **Is it safe to run code from a URL?**
 
-The code is fully open-source — you can [review it on GitHub](https://github.com/xersbtt/ultimate-downloader-colab/blob/main/ultimate_downloader.py) or paste it directly into Colab instead of using the one-liner. Nothing is hidden.
+The code is fully open-source — you can [review it on GitHub](https://github.com/chnd372/ultimate-downloader-fix/blob/main/ultimate_downloader.py) or paste it directly into Colab instead of using the one-liner. Nothing is hidden.
+
+**Why are my Gofile links failing with "wt-rejection" / 401 / folder not found?**
+
+You're probably using the upstream `xersbtt/ultimate-downloader-colab` one-liner. GoFile's authentication changed in 2026 — the old hardcoded `wt` website token (`"4fd6sg89d7s6"`) no longer works, so the upstream version silently fails on every gofile link. Use **this fork** instead: `chnd372/ultimate-downloader-fix` recomputes a dynamic `X-Website-Token` per request. If you copied the upstream one-liner, replace the URL in your cell with:
+
+```python
+import requests; exec(requests.get("https://raw.githubusercontent.com/chnd372/ultimate-downloader-fix/main/ultimate_downloader.py").text)
+```
+
+For password-protected folders, append `::PASSWORD` to the URL — e.g. `https://gofile.io/d/abc123::myPass`.
 
 **Why did my downloads stop after a few hours?**
 
