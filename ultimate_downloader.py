@@ -2984,13 +2984,22 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
 
 
 def resolve_pixeldrain(url, s) -> List[Tuple[str, str]]:
-    """Resolve Pixeldrain URL to direct download link."""
+    """Resolve Pixeldrain URL to direct download link.
+    Accepts official pixeldrain.com plus SpeedDrain mirror variants
+    (cdn*.pixeldrain.{eu,net,org,...}). All mirrors are rewritten to the
+    official CDN endpoint for consistency; users who pasted a SpeedDrain
+    mirror link get a one-line notice so they know it's being routed."""
     try:
-        match = re.search(r'pixeldrain\.com/u/([a-zA-Z0-9]+)', url)
-        if not match:
+        # Try legacy short pattern first (most common paste format)
+        match = re.search(r'pixeldrain\.[a-z]{2,}/(?:u/|api/file/|l/)?([a-zA-Z0-9]+)', url)
+        fid = match.group(1) if match else _extract_pixeldrain_id(url)
+        if not fid:
             print(f"   ⚠️ Pixeldrain: Could not extract file ID from URL")
             return []
-        fid = match.group(1)
+        host = _url_host(url)
+        # Surface mirror use so user can verify the source
+        if host and not host.endswith('pixeldrain.com'):
+            print(f"   🔁 Pixeldrain mirror detected ({host}) — resolving via official CDN")
         name = s.get(f"https://pixeldrain.com/api/file/{fid}/info", timeout=REQUEST_TIMEOUT).json().get('name', f"pixeldrain_{fid}")
         return [(f"https://pixeldrain.com/api/file/{fid}?download", sanitize_filename(name))]
     except Exception as e:
@@ -4493,6 +4502,31 @@ def url_matches_host(url: str, hosts) -> bool:
         return False
     return any(host == h or host.endswith('.' + h) for h in hosts)
 
+def _is_pixeldrain_mirror(url: str) -> bool:
+    """True if URL is any SpeedDrain-recognized pixeldrain mirror (cdnNN.pixeldrain.eu.cc, etc.).
+    TLD list verified from speeddrain.vercel.app JS bundle."""
+    host = _url_host(url)
+    if not host:
+        return False
+    # Strip leading CDN/regional subdomains: cdn, cdn34, r12, www, server, etc.
+    base = re.sub(r'^(cdn|www|r\d+|server|s\d+)\.', '', host)
+    # Documented SpeedDrain mirror TLDs (single-level) + confirmed 2-level combo.
+    # 2-level whitelist kept small on purpose — only combo actually seen serving files.
+    return bool(re.match(r'^pixeldrain\.(eu\.cc|com|net|org|in|eu|co|io|app|me|cc|to|link|download|cloud|host|space|xyz|zip)$', base))
+
+
+def _extract_pixeldrain_id(url: str) -> Optional[str]:
+    """Extract pixeldrain file ID from any mirror URL format.
+    Handles: /u/ID, /l/ID, /api/file/ID, /ID (raw CDN path)."""
+    path = urlparse(url).path
+    for pat in (r'^/u/([a-zA-Z0-9]+)', r'^/l/([a-zA-Z0-9]+)',
+                r'^/api/file/([a-zA-Z0-9]+)', r'^/([a-zA-Z0-9]+)$'):
+        m = re.match(pat, path)
+        if m:
+            return m.group(1)
+    return None
+
+
 def _classify_url(url: str, has_debrid: bool) -> str:
     """Map a URL to a resolver kind (mirrors the historical routing order)."""
     if url_matches_host(url, ('transfer.it',)):
@@ -4505,6 +4539,8 @@ def _classify_url(url: str, has_debrid: bool) -> str:
         return 'stream'
     if url_matches_host(url, ('gofile.io',)):
         return 'gofile'
+    if _is_pixeldrain_mirror(url):
+        return 'pixeldrain'
     if url_matches_host(url, ('pixeldrain.com',)):
         return 'pixeldrain'
     if url_matches_host(url, ('mediafire.com',)):

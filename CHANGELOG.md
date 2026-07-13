@@ -4,7 +4,26 @@ All notable changes to the Ultimate Downloader will be documented in this file.
 
 ---
 
-## v6.3 (Latest)
+## v6.3.2 (Latest)
+
+### 🐛 Bug Fixes
+- **SpeedDrain pixeldrain mirror support**: URLs like `https://cdn.pixeldrain.eu.cc/<id>` (and 16 other `.net/.org/.in/.eu/.co/.io/.app/.me/.cc/.to/.link/.download/.cloud/.host/.space/.xyz/.zip` mirror variants) now resolve via the official pixeldrain CDN. Previously these URLs fell through `_classify_url()` unmatched and silently returned 0 downloads. Mirror use is logged once per resolution so the source is visible.
+
+---
+
+## v6.3.1
+
+### 🐛 Bug Fixes
+- **Gofile downloader broken since gofile v2026**: The hardcoded `wt="4fd6sg89d7s6"` website token no longer works — gofile now requires a dynamic `X-Website-Token` header recomputed every request: `sha256(UA::en-US::token::timeSlot14400::gf2026x)`. The token rotates every 4 hours, so each API call must recompute the hash from the fresh UA + account token + current time slot. Replaced the static constant with `_gofile_wt()` called per-request inside `resolve_gofile()`. Without this, every gofile folder/file link returned a wt-rejection error and downloads silently failed.
+
+### ✨ New Features
+- **Recursive folder walk**: Gofile folders with public subfolders are now traversed recursively, so a folder link containing nested subfolders yields every file inside them (previously only the top level was expanded).
+- **Password-protected gofile links**: Append `::YOURPASSWORD` to any gofile URL (e.g. `https://gofile.io/d/abc123::myPass`) — the password is hashed with sha256 and sent to the `password` query parameter, matching the official client behaviour. Helpful error messages on missing/wrong password instead of silent failure.
+- **User-Agent aligned with official client**: `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0` — required because gofile rejects requests with mismatched UA against the `wt` hash. The wt computation, the account-creation call, and the contents-fetch call all share this UA.
+
+---
+
+## v6.3 (upstream)
 **Theme: TorBox Share-Link Support**
 
 ### ✨ New Features
