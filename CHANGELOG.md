@@ -4,6 +4,11 @@ All notable changes to the Ultimate Downloader will be documented in this file.
 
 ---
 
+## v6.3.4 (Latest)
+
+### 🐛 Bug Fixes
+- **Strip gofile content_id prefix from file/folder names**: When files are uploaded to gofile, the web client auto-prepends `<content_id> ` to the filename (e.g. `p0pwbc Love In Sync - S01E04.mkv` instead of `Love In Sync - S01E04.mkv`). The resolver now strips this prefix in `resolve_gofile()` — checking both the child's own ID and the parent folder's ID, since gofile sometimes prefixes with either. Without this, Plex auto-sorting gets the wrong show name and the file ends up in the wrong folder.
+
 ## v6.3.3
 
 ### 🐛 Bug Fixes

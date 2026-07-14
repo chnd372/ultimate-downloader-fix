@@ -2960,6 +2960,12 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
                     if not child.get('public', True):
                         continue
                     sub = child.get('name', '')
+                    # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
+                    # The prefix can be either this folder's own ID or the parent folder's ID.
+                    for prefix_id in (child.get('id', ''), _id):
+                        if prefix_id and sub.startswith(prefix_id + ' '):
+                            sub = sub[len(prefix_id) + 1:]
+                            break
                     new_prefix = os.path.join(folder_prefix, sub) if folder_prefix else sub
                     _walk(child['id'], new_prefix)
                 else:
@@ -2967,6 +2973,12 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
                     if not direct:
                         continue
                     fname = child.get('name', _id)
+                    # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
+                    # The prefix can be either this file's own ID or the parent folder's ID.
+                    for prefix_id in (child.get('id', ''), _id):
+                        if prefix_id and fname.startswith(prefix_id + ' '):
+                            fname = fname[len(prefix_id) + 1:]
+                            break
                     # On first-level files, prefix with root title for context
                     if not folder_prefix and title_name[0]:
                         display = f"{title_name[0]}/{fname}"
