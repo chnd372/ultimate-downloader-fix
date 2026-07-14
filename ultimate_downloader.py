@@ -2954,7 +2954,14 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
                 return
             payload = data.get('data') or {}
             if not title_name[0]:
-                title_name[0] = payload.get('name') or _id
+                _root_name = payload.get('name') or _id
+                # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
+                # v6.3.5: root folder name was missing this strip — child folders/files
+                # were cleaned by the recursive _walk, but the top-level title shown
+                # to the user still carried the prefix (e.g. "80PVth Love In Sync").
+                if _root_name.startswith(_id + ' '):
+                    _root_name = _root_name[len(_id) + 1:]
+                title_name[0] = _root_name
             for child in (payload.get('children') or {}).values():
                 if child.get('type') == 'folder':
                     if not child.get('public', True):
