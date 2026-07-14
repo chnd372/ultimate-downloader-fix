@@ -4,7 +4,12 @@ All notable changes to the Ultimate Downloader will be documented in this file.
 
 ---
 
-## v6.3.2 (Latest)
+## v6.3.3
+
+### 🐛 Bug Fixes
+- **Gofile salt rotation**: The salt embedded in `gofile.io/dist/js/wt.obf.js` has rotated. The previous `gf2026x` value (v6.3.1) now returns `error-notPremium` (HTTP 401) on every API call — confirmed via live probe in slot 123890. Replaced with `9844d94d963d30`, the salt currently hard-coded in `wt.obf.js` (verified byte-for-byte by martadams89/gofile-dl). X-Website-Token format is unchanged: `sha256(UA::en-US::token::timeSlot14400::salt)`. Without this update, every gofile folder/file link fails to resolve and downloads return 0 files.
+
+## v6.3.3 (Latest)
 
 ### 🐛 Bug Fixes
 - **SpeedDrain pixeldrain mirror support**: URLs like `https://cdn.pixeldrain.eu.cc/<id>` (and 16 other `.net/.org/.in/.eu/.co/.io/.app/.me/.cc/.to/.link/.download/.cloud/.host/.space/.xyz/.zip` mirror variants) now resolve via the official pixeldrain CDN. Previously these URLs fell through `_classify_url()` unmatched and silently returned 0 downloads. Mirror use is logged once per resolution so the source is visible.

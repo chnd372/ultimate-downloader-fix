@@ -2887,9 +2887,13 @@ def get_gofile_session(token: Optional[str]) -> Tuple[requests.Session, dict]:
 
 
 def _gofile_wt(token: str) -> str:
-    """Dynamic X-Website-Token: sha256(UA::lang::token::timeSlot14400::gf2026x). Rotates every 4h."""
+    """Dynamic X-Website-Token: sha256(UA::lang::token::timeSlot14400::9844d94d963d30). Rotates every 4h.
+
+    Salt verified byte-for-byte against gofile.io/dist/js/wt.obf.js (martadams89 reverse-eng).
+    The previous gf2026x salt returned error-notPremium (HTTP 401) on live API as of slot 123890.
+    """
     time_slot = int(time.time()) // 14400
-    raw = f"{GOFILE_USER_AGENT}::en-US::{token}::{time_slot}::gf2026x"
+    raw = f"{GOFILE_USER_AGENT}::en-US::{token}::{time_slot}::9844d94d963d30"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
