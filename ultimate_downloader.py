@@ -3060,6 +3060,10 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
     """Resolve a gofile folder/file link to list of (direct_url, display_name).
     Supports URL form 'https://gofile.io/d/ID' or 'https://gofile.io/d/ID::PASSWORD'.
     Recursively walks public subfolders (preserves folder path in display name)."""
+    # Anonymous gofile folders auto-generate a 6-char alphanumeric id (e.g. "Bwho9S")
+    # and the API often returns that id AS the folder name. We skip using it as a
+    # display prefix to avoid files like "Bwho9S real.mkv" after path sanitization.
+    _RE_ANON_ROOT = re.compile(r'^[A-Za-z0-9]{6}$')
     try:
         # Optional password: '.../d/abc123::myPass'
         password_hash = ""
@@ -3147,8 +3151,12 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
                     if child.get('parentFolder'):
                         seen_ids.add(child['parentFolder'])
                     fname = _strip_prefix(child.get('name', _id))
-                    # On first-level files, prefix with root title for context
-                    if not folder_prefix and title_name[0]:
+                    # On first-level files, prefix with root title for context.
+                    # Skip when the root looks anonymous (name == content_id, or a
+                    # random 6-char alphanumeric id like "Bwho9S") — otherwise the
+                    # resulting path would be "Bwho9S real.mkv" after sanitize.
+                    _root_anon = title_name[0] == content_id or bool(_RE_ANON_ROOT.match(title_name[0]))
+                    if not folder_prefix and title_name[0] and not _root_anon:
                         display = f"{title_name[0]}/{fname}"
                     elif folder_prefix:
                         display = f"{folder_prefix}/{fname}"
