@@ -3078,6 +3078,11 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
 
         results: List[Tuple[str, str]] = []
         title_name = [""]
+        # Every content_id we encounter (root, ancestors, parents) — used to strip gofile's
+        # auto "<content_id> " prefix. The prefix id is whichever folder the item was uploaded
+        # into, which can be ANY ancestor (not just self + immediate parent), so we match
+        # against the whole set instead of only (child.id, _id).
+        seen_ids = {content_id}
         headers_base = {
             'User-Agent': GOFILE_USER_AGENT,
             'Accept-Encoding': 'gzip, deflate, br',
@@ -3087,7 +3092,14 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
             'X-BL': 'en-US',
         }
 
+        def _strip_prefix(name: str) -> str:
+            for cid in seen_ids:
+                if cid and name.startswith(cid + ' '):
+                    return name[len(cid) + 1:]
+            return name
+
         def _walk(_id: str, folder_prefix: str = ""):
+            seen_ids.add(_id)
             params = {'cache': 'true'}
             if password_hash:
                 params['password'] = password_hash
@@ -3112,39 +3124,29 @@ def resolve_gofile(url, s, t) -> List[Tuple[str, str]]:
             if status != 'ok':
                 return
             payload = data.get('data') or {}
+            # A single-file URL lands here with payload being the file itself; gofile may
+            # prefix its name with the PARENT folder's id (not yet in the tree).
+            if payload.get('parentFolder'):
+                seen_ids.add(payload['parentFolder'])
             if not title_name[0]:
                 _root_name = payload.get('name') or _id
-                # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
-                # v6.3.5: root folder name was missing this strip — child folders/files
-                # were cleaned by the recursive _walk, but the top-level title shown
-                # to the user still carried the prefix (e.g. "80PVth Love In Sync").
-                if _root_name.startswith(_id + ' '):
-                    _root_name = _root_name[len(_id) + 1:]
-                title_name[0] = _root_name
+                title_name[0] = _strip_prefix(_root_name)
             for child in (payload.get('children') or {}).values():
                 if child.get('type') == 'folder':
                     if not child.get('public', True):
                         continue
-                    sub = child.get('name', '')
-                    # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
-                    # The prefix can be either this folder's own ID or the parent folder's ID.
-                    for prefix_id in (child.get('id', ''), _id):
-                        if prefix_id and sub.startswith(prefix_id + ' '):
-                            sub = sub[len(prefix_id) + 1:]
-                            break
+                    if child.get('parentFolder'):
+                        seen_ids.add(child['parentFolder'])
+                    sub = _strip_prefix(child.get('name', ''))
                     new_prefix = os.path.join(folder_prefix, sub) if folder_prefix else sub
                     _walk(child['id'], new_prefix)
                 else:
                     direct = child.get('link')
                     if not direct:
                         continue
-                    fname = child.get('name', _id)
-                    # Strip leading "<content_id> " prefix that gofile auto-adds on upload.
-                    # The prefix can be either this file's own ID or the parent folder's ID.
-                    for prefix_id in (child.get('id', ''), _id):
-                        if prefix_id and fname.startswith(prefix_id + ' '):
-                            fname = fname[len(prefix_id) + 1:]
-                            break
+                    if child.get('parentFolder'):
+                        seen_ids.add(child['parentFolder'])
+                    fname = _strip_prefix(child.get('name', _id))
                     # On first-level files, prefix with root title for context
                     if not folder_prefix and title_name[0]:
                         display = f"{title_name[0]}/{fname}"
