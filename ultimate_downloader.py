@@ -560,6 +560,38 @@ rclone_bandwidth_input = widgets.Text(value='', placeholder='100M', description=
 rclone_start_btn = widgets.Button(description="🚀 Start Backup", button_style='success', layout=widgets.Layout(width='140px'))
 rclone_cancel_btn = widgets.Button(description="Cancel", button_style='warning', layout=widgets.Layout(width='90px'))
 rclone_log_output = widgets.Output(layout=widgets.Layout(width='98%', height='220px', border='1px solid #ccc', overflow='auto', padding='4px'))
+
+# Quick-clone widgets: paste a Drive folder URL/ID, click "Quick Clone" and the
+# source field auto-fills as gdrive_src:<ID>. rclone.conf must have remotes
+# named "gdrive_src" (source drive, optionally with root_folder_id) and
+# "gdrive_dst" (your backup drive). The simplest way to give rclone access to
+# a shared folder is to add it as a shortcut in your Drive web UI first.
+rclone_helper_html = widgets.HTML(value=(
+    "<small>💡 <b>Quick clone workflow:</b> upload <code>rclone.conf</code> with two remotes "
+    "(e.g. <code>gdrive_src</code> + <code>gdrive_dst</code>), paste a Drive folder URL/ID, "
+    "click <b>Quick Clone</b> — it pre-fills Source/Dest and runs a dry-run first. "
+    "If the source folder isn't in your Drive, add it as a shortcut in "
+    "<a href='https://drive.google.com/drive/shared-with-me' target='_blank'>Shared with me</a> "
+    "before cloning.</small>"
+))
+rclone_folder_id_input = widgets.Text(
+    value='', placeholder='184P-lGzou92NH9cmuUGOoDM6Tn99myAf (or full URL)',
+    description='Folder ID:', layout=widgets.Layout(width='460px'),
+    style={'description_width': '80px'}
+)
+rclone_listremotes_btn = widgets.Button(
+    description="📡 List Remotes", button_style='info',
+    layout=widgets.Layout(width='130px')
+)
+rclone_quick_clone_btn = widgets.Button(
+    description="🌀 Quick Clone", button_style='success',
+    layout=widgets.Layout(width='140px')
+)
+rclone_serverside_check = widgets.Checkbox(
+    value=True, description='Server-side copy (Drive-to-Drive, no egress)',
+    indent=False, layout=widgets.Layout(width='340px')
+)
+rclone_remotes_output = widgets.HTML(value="")
 _rclone_proc = {'proc': None}
 
 def check_rclone_status(b=None):
@@ -627,6 +659,9 @@ def run_rclone(b=None):
         cmd.append("--dry-run")
     if rclone_verbose_check.value:
         cmd.append("-v")
+    if rclone_serverside_check.value:
+        # Drive-to-Drive copy without downloading through us; cuts egress + time massively
+        cmd.append("--drive-server-side-across-configs")
     bw = rclone_bandwidth_input.value.strip()
     if bw:
         cmd += ["--bwlimit", bw]
@@ -651,6 +686,70 @@ def run_rclone(b=None):
         with rclone_log_output:
             print(f"❌ {e}")
 
+def list_rclone_remotes(b=None):
+    """Show configured remotes from the uploaded rclone.conf (helps users
+    verify which names to use as Source/Dest)."""
+    ok, msg = install_rclone()
+    if not ok:
+        rclone_remotes_output.value = f"<span style='color:red'>❌ {msg}</span>"
+        return
+    if not os.path.exists(RCLONE_CONFIG_FILE):
+        rclone_remotes_output.value = (
+            f"<span style='color:red'>❌ Config not found at {RCLONE_CONFIG_FILE} — upload rclone.conf first.</span>"
+        )
+        return
+    try:
+        out = subprocess.run(
+            ["rclone", "listremotes", "--config", RCLONE_CONFIG_FILE],
+            capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        if not out:
+            rclone_remotes_output.value = (
+                "<span style='color:orange'>⚠️ No remotes configured. "
+                "Upload a valid rclone.conf with at least one [remote] section.</span>"
+            )
+        else:
+            # listremotes appends ":" to each name — strip for display
+            names = [n.rstrip(':') for n in out.splitlines()]
+            rclone_remotes_output.value = (
+                "<small>📡 <b>Configured remotes:</b> "
+                + ' &nbsp;·&nbsp; '.join(f"<code>{n}</code>" for n in names)
+                + "<br><i>Use as <code>remote_name:path/to/folder</code> in Source/Dest. "
+                "Quick Clone expects <code>gdrive_src</code> + <code>gdrive_dst</code>.</i></small>"
+            )
+    except Exception as e:
+        rclone_remotes_output.value = f"<span style='color:red'>❌ {e}</span>"
+
+
+def quick_clone_drive(b=None):
+    """Parse a Drive folder URL/ID, pre-fill Source = gdrive_src:<ID>, set dry-run
+    ON for safety, then call run_rclone(). User reviews the dry-run log, unchecks
+    dry-run, and clicks Start Backup for the real copy."""
+    raw = rclone_folder_id_input.value.strip()
+    if not raw:
+        with rclone_log_output:
+            clear_output()
+            print("❌ Folder ID required. Paste a Drive folder URL or bare ID.")
+            print("   Example: https://drive.google.com/drive/folders/184P-lGzou92NH9cmuUGOoDM6Tn99myAf")
+        return
+    # Accept full URL, /folders/<id>, or a bare id (Google Drive IDs are ~33 chars
+    # of [A-Za-z0-9_-] but be permissive — 10+ char alphanumeric covers it).
+    m = re.search(r'/folders/([A-Za-z0-9_-]+)', raw) or re.match(r'^([A-Za-z0-9_-]{10,})$', raw)
+    if not m:
+        with rclone_log_output:
+            clear_output()
+            print(f"❌ Couldn't extract a folder ID from: {raw!r}")
+            print("   Expected form: https://drive.google.com/drive/folders/<ID>")
+        return
+    fid = m.group(1)
+    rclone_source_input.value = f"gdrive_src:{fid}"
+    if not rclone_dest_input.value.strip():
+        rclone_dest_input.value = "gdrive_dst:Backup/ClonedFolders"
+    rclone_mode_toggle.value = "copy"
+    rclone_dryrun_check.value = True  # safety — user unchecks after review
+    run_rclone()
+
+
 def cancel_rclone(b=None):
     p = _rclone_proc.get('proc')
     if p and p.poll() is None:
@@ -665,6 +764,8 @@ rclone_install_btn.on_click(check_rclone_status)
 rclone_config_upload.observe(upload_rclone_config, names='value')
 rclone_start_btn.on_click(run_rclone)
 rclone_cancel_btn.on_click(cancel_rclone)
+rclone_listremotes_btn.on_click(list_rclone_remotes)
+rclone_quick_clone_btn.on_click(quick_clone_drive)
 
 settings_ui = widgets.VBox([
     widgets.HTML("<b>⚙️ Settings & File Management</b>"),
@@ -685,6 +786,10 @@ settings_ui = widgets.VBox([
     widgets.HTML("<small><b>⚡ Quick Download Options:</b></small>"),
     widgets.HBox([quick_dl_subs_checkbox, quick_dl_subtitle_langs]),
     widgets.HTML("<small><b>☁️ Rclone Backup (drive-to-drive clone/move):</b></small>"),
+    rclone_helper_html,
+    widgets.HBox([rclone_folder_id_input, rclone_listremotes_btn, rclone_quick_clone_btn]),
+    rclone_remotes_output,
+    widgets.HBox([rclone_serverside_check]),
     widgets.HBox([rclone_install_btn, rclone_config_upload, rclone_status]),
     widgets.HBox([rclone_source_input]),
     widgets.HBox([rclone_dest_input]),
