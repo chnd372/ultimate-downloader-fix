@@ -515,6 +515,157 @@ fshare_keys_row = widgets.HBox([token_fshare_email, token_fshare_password])
 # lines up under the Gofile input. (The toggle itself keeps 50px to stay aligned with
 # Year: in the main UI — it's the same widget instance rendered in both places.)
 debrid_row = widgets.HBox([debrid_service_toggle], layout=widgets.Layout(margin='0 0 0 30px'))
+
+# --- RCLONE BACKUP (ponytail: panel + 3 modes; no schedule/cron, no filter editor —
+# add when user wants recurring backups or complex include/exclude rules) ---
+RCLONE_INSTALL_URL = "https://rclone.org/install.sh"
+RCLONE_CONFIG_DIR = f"{UD_CONFIG_PATH}rclone/"
+RCLONE_CONFIG_FILE = f"{RCLONE_CONFIG_DIR}rclone.conf"
+RCLONE_LOG_DIR = f"{UD_CONFIG_PATH}rclone_logs/"
+
+def install_rclone():
+    """Install rclone binary if missing. Colab runs as root, so no sudo needed."""
+    if shutil.which("rclone"):
+        return True, "rclone already installed"
+    try:
+        os.makedirs(RCLONE_CONFIG_DIR, exist_ok=True)
+        os.makedirs(RCLONE_LOG_DIR, exist_ok=True)
+        installer = "/tmp/rclone_install.sh"
+        r = requests.get(RCLONE_INSTALL_URL, timeout=30)
+        r.raise_for_status()
+        with open(installer, "wb") as f:
+            f.write(r.content)
+        os.chmod(installer, 0o755)
+        result = subprocess.run(["bash", installer], capture_output=True, text=True, timeout=180)
+        if result.returncode == 0 and shutil.which("rclone"):
+            return True, "rclone installed"
+        return False, f"install failed (exit {result.returncode}): {result.stderr[-200:]}"
+    except Exception as e:
+        return False, f"install error: {e}"
+
+rclone_status = widgets.HTML(value="")
+rclone_install_btn = widgets.Button(description="⬇️ Install/Check rclone", button_style='info', layout=widgets.Layout(width='180px'))
+rclone_config_upload = widgets.FileUpload(accept='.conf', description='rclone.conf', multiple=False, layout=widgets.Layout(width='220px'))
+rclone_source_input = widgets.Text(value='', placeholder='gdrive_main:My Drive/TV Shows', description='Source:', layout=widgets.Layout(width='500px'), style={'description_width': '80px'})
+rclone_dest_input = widgets.Text(value='', placeholder='gdrive_backup:Backup/TV Shows', description='Dest:', layout=widgets.Layout(width='500px'), style={'description_width': '80px'})
+rclone_mode_toggle = widgets.ToggleButtons(
+    options=[('📋 Copy (clone)', 'copy'), ('🔄 Sync (mirror)', 'sync'), ('➡️ Move (transfer)', 'move')],
+    value='copy', description='Mode:', layout=widgets.Layout(width='340px'), style={'description_width': '60px'}
+)
+rclone_dryrun_check = widgets.Checkbox(value=True, description='Dry-run first (safe)', indent=False, layout=widgets.Layout(width='180px'))
+rclone_verbose_check = widgets.Checkbox(value=False, description='Verbose', indent=False, layout=widgets.Layout(width='100px'))
+rclone_transfers_input = widgets.IntText(value=4, description='Transfers:', layout=widgets.Layout(width='110px'), style={'description_width': '70px'})
+rclone_checkers_input = widgets.IntText(value=8, description='Checkers:', layout=widgets.Layout(width='110px'), style={'description_width': '70px'})
+rclone_bandwidth_input = widgets.Text(value='', placeholder='100M', description='Bandwidth:', layout=widgets.Layout(width='160px'), style={'description_width': '80px'})
+rclone_start_btn = widgets.Button(description="🚀 Start Backup", button_style='success', layout=widgets.Layout(width='140px'))
+rclone_cancel_btn = widgets.Button(description="Cancel", button_style='warning', layout=widgets.Layout(width='90px'))
+rclone_log_output = widgets.Output(layout=widgets.Layout(width='98%', height='220px', border='1px solid #ccc', overflow='auto', padding='4px'))
+_rclone_proc = {'proc': None}
+
+def check_rclone_status(b=None):
+    ok, msg = install_rclone()
+    if ok:
+        try:
+            v = subprocess.run(["rclone", "--version"], capture_output=True, text=True, timeout=10).stdout.split('\n')[0]
+            rclone_status.value = f"<span style='color:green'>✅ {v}</span>"
+        except Exception:
+            rclone_status.value = "<span style='color:green'>✅ installed</span>"
+    else:
+        rclone_status.value = f"<span style='color:red'>❌ {msg}</span>"
+
+def upload_rclone_config(change):
+    """Save uploaded rclone.conf to UD config dir."""
+    try:
+        val = rclone_config_upload.value
+        if not val:
+            return
+        os.makedirs(RCLONE_CONFIG_DIR, exist_ok=True)
+        # FileUpload.value is dict {filename: {content, ...}} in ipywidgets 8+
+        if isinstance(val, dict):
+            content = next(iter(val.values()))['content']
+        else:  # tuple of dicts (older versions)
+            content = val[0]['content']
+        with open(RCLONE_CONFIG_FILE, "wb") as f:
+            f.write(content)
+        os.chmod(RCLONE_CONFIG_FILE, 0o600)
+        rclone_status.value = f"<span style='color:green'>✅ Config saved ({len(content)} bytes). Click 'Install/Check rclone' to list remotes.</span>"
+    except Exception as e:
+        rclone_status.value = f"<span style='color:red'>❌ upload error: {e}</span>"
+
+def run_rclone(b=None):
+    """Execute rclone copy/sync/move with live log streaming."""
+    src = rclone_source_input.value.strip()
+    dst = rclone_dest_input.value.strip()
+    if not src or not dst:
+        with rclone_log_output:
+            clear_output()
+            print("❌ Source and Dest required. Examples:")
+            print("   Source: gdrive_main:My Drive/TV Shows")
+            print("   Dest:   gdrive_backup:Backup/TV Shows")
+        return
+    ok, msg = install_rclone()
+    if not ok:
+        with rclone_log_output:
+            clear_output()
+            print(f"❌ {msg}")
+        return
+    if not os.path.exists(RCLONE_CONFIG_FILE):
+        with rclone_log_output:
+            clear_output()
+            print(f"❌ Config not found at {RCLONE_CONFIG_FILE}")
+            print("   Upload rclone.conf above (must define BOTH remotes).")
+        return
+    cmd = ["rclone", rclone_mode_toggle.value, src, dst,
+           "--config", RCLONE_CONFIG_FILE,
+           "--transfers", str(rclone_transfers_input.value or 4),
+           "--checkers", str(rclone_checkers_input.value or 8),
+           "--stats", "10s",
+           "--stats-one-line",
+           "--use-json-log",
+           "--log-file", f"{RCLONE_LOG_DIR}last.log"]
+    if rclone_dryrun_check.value:
+        cmd.append("--dry-run")
+    if rclone_verbose_check.value:
+        cmd.append("-v")
+    bw = rclone_bandwidth_input.value.strip()
+    if bw:
+        cmd += ["--bwlimit", bw]
+    with rclone_log_output:
+        clear_output()
+        print(f"$ {' '.join(cmd)}\n")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        _rclone_proc['proc'] = proc
+        for line in proc.stdout:
+            with rclone_log_output:
+                print(line, end='')
+        proc.wait()
+        _rclone_proc['proc'] = None
+        with rclone_log_output:
+            if proc.returncode == 0:
+                print("\n✅ Done")
+            else:
+                print(f"\n❌ Exit {proc.returncode}")
+    except Exception as e:
+        _rclone_proc['proc'] = None
+        with rclone_log_output:
+            print(f"❌ {e}")
+
+def cancel_rclone(b=None):
+    p = _rclone_proc.get('proc')
+    if p and p.poll() is None:
+        p.terminate()
+        with rclone_log_output:
+            print("\n⚠️ Cancelled by user")
+    else:
+        with rclone_log_output:
+            print("\n⚠️ No active rclone process")
+
+rclone_install_btn.on_click(check_rclone_status)
+rclone_config_upload.observe(upload_rclone_config, names='value')
+rclone_start_btn.on_click(run_rclone)
+rclone_cancel_btn.on_click(cancel_rclone)
+
 settings_ui = widgets.VBox([
     widgets.HTML("<b>⚙️ Settings & File Management</b>"),
     widgets.HTML("<small><b>🔑 API Keys:</b></small>"),
@@ -533,6 +684,14 @@ settings_ui = widgets.VBox([
     widgets.HBox([async_moves_checkbox]),
     widgets.HTML("<small><b>⚡ Quick Download Options:</b></small>"),
     widgets.HBox([quick_dl_subs_checkbox, quick_dl_subtitle_langs]),
+    widgets.HTML("<small><b>☁️ Rclone Backup (drive-to-drive clone/move):</b></small>"),
+    widgets.HBox([rclone_install_btn, rclone_config_upload, rclone_status]),
+    widgets.HBox([rclone_source_input]),
+    widgets.HBox([rclone_dest_input]),
+    widgets.HBox([rclone_mode_toggle, rclone_dryrun_check, rclone_verbose_check]),
+    widgets.HBox([rclone_transfers_input, rclone_checkers_input, rclone_bandwidth_input]),
+    widgets.HBox([rclone_start_btn, rclone_cancel_btn]),
+    rclone_log_output,
     widgets.HTML("<small><b>🗑️ Clear Data:</b></small>"),
     settings_buttons,
     confirm_box,
