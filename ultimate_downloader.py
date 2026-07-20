@@ -111,7 +111,7 @@ class DownloadTask:
     url: str  # Direct download URL (may be resolved API URL)
     filename: str
     source: str
-    link_type: str  # gofile, pixeldrain, direct, youtube, mega, rd, tb
+    link_type: str  # gofile, fileditch, pixeldrain, direct, youtube, mega, rd, tb
     id: str = field(default_factory=lambda: str(uuid4()))  # Unique ID for tracking
     status: str = "pending"  # pending, downloading, moving (downloaded, Drive move pending), done, failed, skipped
     error: Optional[str] = None
@@ -3303,6 +3303,37 @@ def resolve_pixeldrain(url, s) -> List[Tuple[str, str]]:
         print(f"   ❌ Pixeldrain Error: {str(e)[:80]} - File may not exist or be private")
     return []
 
+
+def resolve_fileditch(url: str, s: requests.Session) -> List[Tuple[str, str]]:
+    """Solve FileDitch's browser PoW and return its temporary direct CDN URL."""
+    try:
+        page = s.get(url, timeout=REQUEST_TIMEOUT)
+        page.raise_for_status()
+        fields = dict(re.findall(r'name="(pow_(?:challenge|ts|diff|sig))"\s+value="([^"]+)"', page.text))
+        if len(fields) != 4:
+            raise ValueError("PoW challenge not found")
+        challenge, difficulty = fields['pow_challenge'], int(fields['pow_diff'])
+        mask = (1 << (256 - difficulty)) - 1
+        for nonce in range(100_000_000):
+            digest = hashlib.sha256(f"{challenge}:{nonce}".encode()).digest()
+            if int.from_bytes(digest, 'big') & mask == 0:
+                break
+        else:
+            raise RuntimeError("PoW solution not found")
+        resolved = s.post(url, data={**fields, 'pow_nonce': str(nonce), 'orig_ref': ''},
+                          headers={'Referer': url}, timeout=REQUEST_TIMEOUT)
+        resolved.raise_for_status()
+        match = re.search(r'var u = \[(.*?)\]\.join\(""\)', resolved.text, re.S)
+        if not match:
+            raise ValueError("direct download URL not found")
+        direct_url = ''.join(json.loads(f'[{match.group(1)}]'))
+        filename = sanitize_filename(os.path.basename(urlparse(direct_url).path))
+        return [(direct_url, filename or 'fileditch_download')]
+    except Exception as e:
+        print(f"   ❌ FileDitch Error: {str(e)[:100]}")
+        return []
+
+
 def process_rd_link(link, key) -> bool:
     """Download an RD link or magnet. Returns True on success (or duplicate skip),
     False on any error/timeout/failed download so the caller can mark it for retry."""
@@ -4836,6 +4867,8 @@ def _classify_url(url: str, has_debrid: bool) -> str:
         return 'stream'
     if url_matches_host(url, ('gofile.io',)):
         return 'gofile'
+    if url_matches_host(url, ('fileditchfiles.st',)):
+        return 'fileditch'
     if _is_pixeldrain_mirror(url):
         return 'pixeldrain'
     if url_matches_host(url, ('pixeldrain.com',)):
@@ -4888,6 +4921,8 @@ def resolve_all_links(urls: List[str], session: requests.Session, tokens: dict, 
         for i, (url, kind) in enumerate(classified):
             if kind == 'gofile':
                 futures[i] = executor.submit(resolve_gofile, url, session, tokens)
+            elif kind == 'fileditch':
+                futures[i] = executor.submit(resolve_fileditch, url, session)
             elif kind == 'pixeldrain':
                 futures[i] = executor.submit(resolve_pixeldrain, url, session)
             elif kind == 'mediafire' and not has_debrid:
@@ -4935,6 +4970,12 @@ def resolve_all_links(urls: List[str], session: requests.Session, tokens: dict, 
                     parallel_tasks.append(DownloadTask(
                         url=u, filename=n, source="gofile", link_type="gofile",
                         cookie=tokens.get('token'), original_url=url  # Store original for re-resolve
+                    ))
+            elif kind == 'fileditch':
+                for u, n in futures[i].result():
+                    parallel_tasks.append(DownloadTask(
+                        url=u, filename=n, source="fileditch", link_type="fileditch",
+                        original_url=url
                     ))
             elif kind == 'pixeldrain':
                 for u, n in futures[i].result():
@@ -5720,7 +5761,7 @@ def execute_batch(mode: str, resume: bool = False, quick_mode: bool = False, aut
                 _apply_tmdb_overrides(pending_tasks)
 
             # Install required tools first
-            needs_pixeldrain_gofile_rd_tb = any(t.link_type in ['gofile', 'pixeldrain', 'rd', 'tb'] for t in pending_tasks)
+            needs_pixeldrain_gofile_rd_tb = any(t.link_type in ['gofile', 'fileditch', 'pixeldrain', 'rd', 'tb'] for t in pending_tasks)
             needs_fshare = any(t.link_type == 'fshare' for t in pending_tasks)
             needs_ytdlp = any(t.link_type in ['youtube', 'archive'] for t in pending_tasks)
             needs_mega = any(t.link_type == 'mega' for t in pending_tasks)
@@ -5733,13 +5774,17 @@ def execute_batch(mode: str, resume: bool = False, quick_mode: bool = False, aut
                 s, t = get_gofile_session(gofile_token)
                 
                 for task in pending_tasks:
-                    if task.original_url and task.link_type in ['gofile', 'pixeldrain', 'rd', 'tb']:
+                    if task.original_url and task.link_type in ['gofile', 'fileditch', 'pixeldrain', 'rd', 'tb']:
                         try:
                             if task.link_type == 'gofile':
                                 resolved = resolve_gofile(task.original_url, s, t)
                                 if resolved:
                                     task.url = resolved[0][0]  # Update with fresh API URL
                                     task.cookie = t.get('token')
+                            elif task.link_type == 'fileditch':
+                                resolved = resolve_fileditch(task.original_url, s)
+                                if resolved:
+                                    task.url = resolved[0][0]
                             elif task.link_type == 'pixeldrain':
                                 resolved = resolve_pixeldrain(task.original_url, s)
                                 if resolved:
@@ -5791,7 +5836,7 @@ def execute_batch(mode: str, resume: bool = False, quick_mode: bool = False, aut
                           any(url_matches_host(u, ('archive.org',)) and '/details/' in u for u in urls)
             needs_mega = any(url_matches_host(u, ('mega.nz', 'transfer.it')) for u in urls)
             needs_aria = not (needs_ytdlp and not needs_mega) or any(
-                url_matches_host(u, ('gofile.io', 'pixeldrain.com', 'real-debrid.com', 'mega.nz', 'fshare.vn'))
+                url_matches_host(u, ('gofile.io', 'fileditchfiles.st', 'pixeldrain.com', 'real-debrid.com', 'mega.nz', 'fshare.vn'))
                 or u.startswith('magnet:') for u in urls)
 
             setup_environment(needs_mega, needs_ytdlp, needs_aria)
