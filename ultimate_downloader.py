@@ -3313,10 +3313,9 @@ def resolve_fileditch(url: str, s: requests.Session) -> List[Tuple[str, str]]:
         if len(fields) != 4:
             raise ValueError("PoW challenge not found")
         challenge, difficulty = fields['pow_challenge'], int(fields['pow_diff'])
-        mask = (1 << (256 - difficulty)) - 1
         for nonce in range(100_000_000):
             digest = hashlib.sha256(f"{challenge}:{nonce}".encode()).digest()
-            if int.from_bytes(digest, 'big') & mask == 0:
+            if int.from_bytes(digest, 'big') >> (256 - difficulty) == 0:
                 break
         else:
             raise RuntimeError("PoW solution not found")
